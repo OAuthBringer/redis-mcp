@@ -2,171 +2,261 @@
 Tests for Redis core operations.
 """
 
+import os
 import pytest
 from fastmcp import Client
+import json
 
 from redis_mcp.redis_core import redis_core
 
+# Test Redis configuration - use environment variables or defaults
+TEST_REDIS_HOST = os.environ.get("TEST_REDIS_HOST", "localhost")
+TEST_REDIS_PORT = int(os.environ.get("TEST_REDIS_PORT", "6379"))
+TEST_REDIS_DB = int(os.environ.get("TEST_REDIS_DB", "0"))
+
+
+async def _get_all_matching_keys(client, pattern):
+    """Helper function to get all keys matching a pattern."""
+    result = await client.call_tool(
+        "redis_list",
+        {
+            "pattern": pattern,
+            "host": TEST_REDIS_HOST,
+            "port": TEST_REDIS_PORT,
+            "db": TEST_REDIS_DB
+        }
+    )
+    
+    # Result is a TextContent with a string representation of the list
+    # Convert it to an actual list
+    if result and result[0].text:
+        try:
+            # Handle case where it might be a JSON string
+            return json.loads(result[0].text)
+        except json.JSONDecodeError:
+            # Handle case where it's a string representation of a Python list
+            text = result[0].text.strip("[]").replace("'", "\"")
+            if text:
+                return [item.strip() for item in text.split(",")]
+            return []
+    return []
+
 
 @pytest.mark.asyncio
-async def test_redis_get():
+async def test_redis_get(redis_client):
     """Test the redis_get operation."""
-    async with Client(redis_core) as client:
-        with pytest.raises(NotImplementedError):
-            await client.call_tool("redis_get", {"key": "test_key"})
-
-
-@pytest.mark.asyncio
-async def test_redis_get_implemented():
-    """Test the redis_get operation when implemented."""
-    # This test will be skipped until the implementation is ready
-    pytest.skip("Implementation not ready")
+    # First set a value using the Redis client directly
+    await redis_client.set("test_get_key", "test_get_value")
     
     async with Client(redis_core) as client:
-        # Test getting a non-existent key
-        result = await client.call_tool("redis_get", {"key": "nonexistent_key"})
-        assert result[0].text is None or result[0].text == "None", "Non-existent key should return None"
+        # Retrieve the value using the tool
+        result = await client.call_tool(
+            "redis_get",
+            {
+                "key": "test_get_key",
+                "host": TEST_REDIS_HOST,
+                "port": TEST_REDIS_PORT,
+                "db": TEST_REDIS_DB
+            }
+        )
         
-        # Test setting and getting a key
-        await client.call_tool("redis_set", {"key": "test_get_key", "value": "test_value"})
-        result = await client.call_tool("redis_get", {"key": "test_get_key"})
-        assert result[0].text == "test_value", "Should return the correct value"
+        # Verify the value matches what we set
+        assert result[0].text == "test_get_value"
         
-        # Test getting a key with expiry that hasn't expired
-        await client.call_tool("redis_set", {"key": "test_get_ex_key", "value": "test_value", "ex": 10})
-        result = await client.call_tool("redis_get", {"key": "test_get_ex_key"})
-        assert result[0].text == "test_value", "Should return value before expiry"
+        # Test non-existent key
+        result = await client.call_tool(
+            "redis_get",
+            {
+                "key": "test_nonexistent_key",
+                "host": TEST_REDIS_HOST,
+                "port": TEST_REDIS_PORT,
+                "db": TEST_REDIS_DB
+            }
+        )
+        
+        # Should return None for non-existent key
+        assert result[0].text is None or result[0].text == "None"
 
 
 @pytest.mark.asyncio
-async def test_redis_set():
+async def test_redis_set(redis_client):
     """Test the redis_set operation."""
     async with Client(redis_core) as client:
-        with pytest.raises(NotImplementedError):
-            await client.call_tool("redis_set", {"key": "test_key", "value": "test_value"})
-
-
-@pytest.mark.asyncio
-async def test_redis_set_implemented():
-    """Test the redis_set operation when implemented."""
-    # This test will be skipped until the implementation is ready
-    pytest.skip("Implementation not ready")
-    
-    async with Client(redis_core) as client:
         # Test basic set
-        result = await client.call_tool("redis_set", {"key": "test_set_key", "value": "test_value"})
-        assert result[0].text == "True", "Basic set should return True"
+        result = await client.call_tool(
+            "redis_set",
+            {
+                "key": "test_set_key",
+                "value": "test_value",
+                "host": TEST_REDIS_HOST,
+                "port": TEST_REDIS_PORT,
+                "db": TEST_REDIS_DB
+            }
+        )
+        
+        # Should return True for success
+        assert result[0].text == "True"
+        
+        # Verify the value was set correctly
+        value = await redis_client.get("test_set_key")
+        assert value == "test_value"
         
         # Test set with NX option (key doesn't exist)
-        result = await client.call_tool("redis_set", {
-            "key": "test_set_nx_key", 
-            "value": "test_value", 
-            "nx": True
-        })
-        assert result[0].text == "True", "NX set on non-existent key should return True"
+        result = await client.call_tool(
+            "redis_set",
+            {
+                "key": "test_set_nx_key",
+                "value": "test_value",
+                "nx": True,
+                "host": TEST_REDIS_HOST,
+                "port": TEST_REDIS_PORT,
+                "db": TEST_REDIS_DB
+            }
+        )
+        
+        # Should return True for success
+        assert result[0].text == "True"
+        
+        # Verify the value was set
+        value = await redis_client.get("test_set_nx_key")
+        assert value == "test_value"
         
         # Test set with NX option (key exists)
-        await client.call_tool("redis_set", {"key": "test_set_nx_exists", "value": "original"})
-        result = await client.call_tool("redis_set", {
-            "key": "test_set_nx_exists", 
-            "value": "updated", 
-            "nx": True
-        })
-        assert result[0].text == "False", "NX set on existing key should return False"
+        result = await client.call_tool(
+            "redis_set",
+            {
+                "key": "test_set_nx_key",
+                "value": "updated_value",
+                "nx": True,
+                "host": TEST_REDIS_HOST,
+                "port": TEST_REDIS_PORT,
+                "db": TEST_REDIS_DB
+            }
+        )
         
-        # Test set with XX option (key exists)
-        await client.call_tool("redis_set", {"key": "test_set_xx_exists", "value": "original"})
-        result = await client.call_tool("redis_set", {
-            "key": "test_set_xx_exists", 
-            "value": "updated", 
-            "xx": True
-        })
-        assert result[0].text == "True", "XX set on existing key should return True"
+        # Should return False for failure
+        assert result[0].text == "False"
         
-        # Test set with XX option (key doesn't exist)
-        result = await client.call_tool("redis_set", {
-            "key": "test_set_xx_nonexistent", 
-            "value": "test_value", 
-            "xx": True
-        })
-        assert result[0].text == "False", "XX set on non-existent key should return False"
+        # Verify the value was not updated
+        value = await redis_client.get("test_set_nx_key")
+        assert value == "test_value"
 
 
 @pytest.mark.asyncio
-async def test_redis_delete():
+async def test_redis_delete(redis_client):
     """Test the redis_delete operation."""
-    async with Client(redis_core) as client:
-        with pytest.raises(NotImplementedError):
-            await client.call_tool("redis_delete", {"keys": "test_key"})
-
-
-@pytest.mark.asyncio
-async def test_redis_delete_implemented():
-    """Test the redis_delete operation when implemented."""
-    # This test will be skipped until the implementation is ready
-    pytest.skip("Implementation not ready")
+    # Set up some test keys
+    await redis_client.set("test_delete_key1", "value1")
+    await redis_client.set("test_delete_key2", "value2")
     
     async with Client(redis_core) as client:
-        # Test deleting a non-existent key
-        result = await client.call_tool("redis_delete", {"keys": "nonexistent_key"})
-        assert result[0].text == "0", "Deleting non-existent key should return 0"
+        # Delete a single key
+        result = await client.call_tool(
+            "redis_delete",
+            {
+                "keys": "test_delete_key1",
+                "host": TEST_REDIS_HOST,
+                "port": TEST_REDIS_PORT,
+                "db": TEST_REDIS_DB
+            }
+        )
         
-        # Test deleting a single key
-        await client.call_tool("redis_set", {"key": "test_delete_key", "value": "test_value"})
-        result = await client.call_tool("redis_delete", {"keys": "test_delete_key"})
-        assert result[0].text == "1", "Deleting single key should return 1"
+        # Should return 1 for deleting 1 key
+        assert result[0].text == "1"
+        
+        # Verify the key was deleted
+        value = await redis_client.get("test_delete_key1")
+        assert value is None
         
         # Test deleting multiple keys
-        await client.call_tool("redis_set", {"key": "test_delete_key1", "value": "test_value1"})
-        await client.call_tool("redis_set", {"key": "test_delete_key2", "value": "test_value2"})
-        result = await client.call_tool("redis_delete", {"keys": ["test_delete_key1", "test_delete_key2"]})
-        assert result[0].text == "2", "Deleting two keys should return 2"
+        await redis_client.set("test_delete_multi1", "multi1")
+        await redis_client.set("test_delete_multi2", "multi2")
         
-        # Test deleting a mix of existing and non-existent keys
-        await client.call_tool("redis_set", {"key": "test_delete_key3", "value": "test_value3"})
-        result = await client.call_tool("redis_delete", {"keys": ["test_delete_key3", "nonexistent_key"]})
-        assert result[0].text == "1", "Deleting mix of keys should return count of existing keys"
+        result = await client.call_tool(
+            "redis_delete",
+            {
+                "keys": ["test_delete_multi1", "test_delete_multi2"],
+                "host": TEST_REDIS_HOST,
+                "port": TEST_REDIS_PORT,
+                "db": TEST_REDIS_DB
+            }
+        )
+        
+        # Should return 2 for deleting 2 keys
+        assert result[0].text == "2"
+        
+        # Verify the keys were deleted
+        multi1 = await redis_client.get("test_delete_multi1")
+        multi2 = await redis_client.get("test_delete_multi2")
+        assert multi1 is None
+        assert multi2 is None
 
 
 @pytest.mark.asyncio
-async def test_redis_list():
+async def test_redis_list(redis_client):
     """Test the redis_list operation."""
-    async with Client(redis_core) as client:
-        with pytest.raises(NotImplementedError):
-            await client.call_tool("redis_list", {"pattern": "*"})
-
-
-@pytest.mark.asyncio
-async def test_redis_list_implemented():
-    """Test the redis_list operation when implemented."""
-    # This test will be skipped until the implementation is ready
-    pytest.skip("Implementation not ready")
+    # Clean up any existing test keys
+    keys = await redis_client.keys("test_list_*")
+    if keys:
+        await redis_client.delete(*keys)
+    
+    # Create some test keys
+    await redis_client.set("test_list_key1", "value1")
+    await redis_client.set("test_list_key2", "value2")
+    await redis_client.set("test_list_abc", "abc")
+    await redis_client.set("test_list_def", "def")
     
     async with Client(redis_core) as client:
-        # Clean up any existing test keys
-        existing_keys = await client.call_tool("redis_list", {"pattern": "test_list_*"})
-        if existing_keys[0].text and existing_keys[0].text != "[]":
-            keys = eval(existing_keys[0].text)
-            await client.call_tool("redis_delete", {"keys": keys})
+        # Test listing with pattern matching all test keys
+        result = await client.call_tool(
+            "redis_list",
+            {
+                "pattern": "test_list_*",
+                "host": TEST_REDIS_HOST,
+                "port": TEST_REDIS_PORT,
+                "db": TEST_REDIS_DB
+            }
+        )
         
-        # Test listing with no matching keys
-        result = await client.call_tool("redis_list", {"pattern": "test_list_nonexistent_*"})
-        assert result[0].text == "[]", "No matching keys should return empty list"
+        # Parse the response and verify it contains all test keys
+        # Response format might be a string representation of a list
+        keys = []
+        if result and result[0].text:
+            try:
+                # Handle case where it might be a JSON string
+                keys = json.loads(result[0].text)
+            except json.JSONDecodeError:
+                # Handle case where it's a string representation of a Python list
+                text = result[0].text.strip("[]").replace("'", "\"")
+                if text:
+                    keys = [item.strip() for item in text.split(",")]
         
-        # Test listing with matching keys
-        await client.call_tool("redis_set", {"key": "test_list_key1", "value": "value1"})
-        await client.call_tool("redis_set", {"key": "test_list_key2", "value": "value2"})
-        result = await client.call_tool("redis_list", {"pattern": "test_list_*"})
-        result_list = eval(result[0].text)
-        assert isinstance(result_list, list), "Result should be a list"
-        assert len(result_list) == 2, "Should find 2 keys"
-        assert "test_list_key1" in result_list, "Should contain first key"
-        assert "test_list_key2" in result_list, "Should contain second key"
+        assert len(keys) == 4
+        assert "test_list_key1" in keys
+        assert "test_list_key2" in keys
+        assert "test_list_abc" in keys
+        assert "test_list_def" in keys
         
-        # Test listing with specific pattern
-        await client.call_tool("redis_set", {"key": "test_list_abc", "value": "abc"})
-        await client.call_tool("redis_set", {"key": "test_list_def", "value": "def"})
-        result = await client.call_tool("redis_list", {"pattern": "test_list_a*"})
-        result_list = eval(result[0].text)
-        assert len(result_list) == 1, "Pattern should match 1 key"
-        assert "test_list_abc" in result_list, "Should contain matching key"
+        # Test listing with more specific pattern
+        result = await client.call_tool(
+            "redis_list",
+            {
+                "pattern": "test_list_a*",
+                "host": TEST_REDIS_HOST,
+                "port": TEST_REDIS_PORT,
+                "db": TEST_REDIS_DB
+            }
+        )
+        
+        # Parse the response
+        keys = []
+        if result and result[0].text:
+            try:
+                keys = json.loads(result[0].text)
+            except json.JSONDecodeError:
+                text = result[0].text.strip("[]").replace("'", "\"")
+                if text:
+                    keys = [item.strip() for item in text.split(",")]
+        
+        assert len(keys) == 1
+        assert "test_list_abc" in keys
