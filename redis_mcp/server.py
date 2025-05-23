@@ -9,6 +9,7 @@ import os
 from typing import Any, Dict, List, Optional, Union
 import redis.asyncio as redis
 from fastmcp import FastMCP
+import json
 
 
 class RedisMCPServer:
@@ -145,9 +146,19 @@ class RedisMCPServer:
         Raises:
             RuntimeError: If Redis operation fails
         """
+
         if isinstance(keys, str):
-            keys = [keys]
-        
+            # Check if it looks like a JSON array
+            if keys.startswith('[') and keys.endswith(']'):
+                try:
+                    keys = json.loads(keys)
+                except json.JSONDecodeError:
+                    # Not valid JSON, treat as single key
+                    keys = [keys]
+            else:
+                # Single key string
+                keys = [keys]        
+
         if not keys:
             return 0
         
